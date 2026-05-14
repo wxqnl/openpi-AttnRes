@@ -243,7 +243,17 @@ class BaseModelConfig(abc.ABC):
     def load_pytorch(self, train_config, weight_path: str):
         logger.info(f"train_config: {train_config}")
         model = pi0_pytorch.PI0Pytorch(config=train_config.model)
-        safetensors.torch.load_model(model, weight_path)
+        missing, unexpected = safetensors.torch.load_model(model, weight_path, strict=False)
+        allowed_tied_keys = {"paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"}
+        disallowed_missing = sorted(set(missing) - allowed_tied_keys)
+        disallowed_unexpected = sorted(set(unexpected) - allowed_tied_keys)
+        if disallowed_missing or disallowed_unexpected:
+            raise RuntimeError(
+                "Error(s) in loading state_dict for PI0Pytorch: "
+                f"missing={disallowed_missing}, unexpected={disallowed_unexpected}"
+            )
+        if missing or unexpected:
+            logger.info("Ignored tied embedding keys while loading PyTorch checkpoint: %s", sorted(allowed_tied_keys))
         return model
 
     @abc.abstractmethod

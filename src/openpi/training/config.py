@@ -16,6 +16,7 @@ import tyro
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
+import openpi.models.pi05_attnres_config as pi05_attnres_config
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
@@ -751,6 +752,39 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi05_attnres_libero",
+        model=pi05_attnres_config.Pi05AttnResConfig(
+            action_horizon=10,
+            discrete_state_input=False,
+            attnres_num_blocks=9,
+            attnres_adapter_rank=256,
+            attnres_init="random",
+            attnres_trainable=True,
+            attnres_gamma_schedule=True,
+            attnres_gamma_start=0.0,
+            attnres_gamma_end=1.0,
+            attnres_gamma_ramp_steps=30_000,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./models/pi05_libero_pytorch",
+        num_train_steps=30_000,
+        fsdp_devices=2,
     ),
     #
     # Fine-tuning Aloha configs.

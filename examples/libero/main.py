@@ -3,6 +3,7 @@ import dataclasses
 import logging
 import math
 import pathlib
+from typing import Optional
 
 import imageio
 from libero.libero import benchmark
@@ -34,6 +35,8 @@ class Args:
     task_suite_name: str = (
         "libero_spatial"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
     )
+    task_start: int = 0  # First task id to evaluate, inclusive.
+    task_end: Optional[int] = None  # Last task id to evaluate, exclusive. None means all remaining tasks.
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
 
@@ -74,7 +77,8 @@ def eval_libero(args: Args) -> None:
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    task_end = num_tasks_in_suite if args.task_end is None else min(args.task_end, num_tasks_in_suite)
+    for task_id in tqdm.tqdm(range(args.task_start, task_end)):
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -181,6 +185,10 @@ def eval_libero(args: Args) -> None:
         # Log final results
         logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+        try:
+            env.close()
+        except Exception as e:
+            logging.warning(f"Failed to close LIBERO env cleanly: {e}")
 
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")

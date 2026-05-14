@@ -241,8 +241,7 @@ class PI0Pytorch(nn.Module):
         att_masks = []
 
         if not self.pi05:
-            if self.state_proj.weight.dtype == torch.float32:
-                state = state.to(torch.float32)
+            state = state.to(dtype=self.state_proj.weight.dtype)
 
             # Embed state
             def state_proj_func(state):
@@ -267,6 +266,9 @@ class PI0Pytorch(nn.Module):
         time_emb = time_emb.type(dtype=timestep.dtype)
 
         # Fuse timestep + action information using an MLP
+        action_proj_dtype = self.action_in_proj.weight.dtype
+        noisy_actions = noisy_actions.to(dtype=action_proj_dtype)
+
         def action_proj_func(noisy_actions):
             return self.action_in_proj(noisy_actions)
 
@@ -275,6 +277,7 @@ class PI0Pytorch(nn.Module):
         if not self.pi05:
             time_emb = time_emb[:, None, :].expand_as(action_emb)
             action_time_emb = torch.cat([action_emb, time_emb], dim=2)
+            action_time_emb = action_time_emb.to(dtype=self.action_time_mlp_in.weight.dtype)
 
             # Apply MLP layers
             def mlp_func(action_time_emb):
@@ -286,6 +289,8 @@ class PI0Pytorch(nn.Module):
             adarms_cond = None
         else:
             # time MLP (for adaRMS)
+            time_emb = time_emb.to(dtype=self.time_mlp_in.weight.dtype)
+
             def time_mlp_func(time_emb):
                 x = self.time_mlp_in(time_emb)
                 x = F.silu(x)  # swish == silu
@@ -362,7 +367,7 @@ class PI0Pytorch(nn.Module):
         )
 
         suffix_out = suffix_out[:, -self.config.action_horizon :]
-        suffix_out = suffix_out.to(dtype=torch.float32)
+        suffix_out = suffix_out.to(dtype=self.action_out_proj.weight.dtype)
 
         # Apply gradient checkpointing to final action projection if enabled
         def action_out_proj_func(suffix_out):
@@ -370,7 +375,7 @@ class PI0Pytorch(nn.Module):
 
         v_t = self._apply_checkpoint(action_out_proj_func, suffix_out)
 
-        return F.mse_loss(u_t, v_t, reduction="none")
+        return F.mse_loss(u_t.to(dtype=torch.float32), v_t.to(dtype=torch.float32), reduction="none")
 
     @torch.no_grad()
     def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
@@ -457,5 +462,5 @@ class PI0Pytorch(nn.Module):
 
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.action_horizon :]
-        suffix_out = suffix_out.to(dtype=torch.float32)
-        return self.action_out_proj(suffix_out)
+        suffix_out = suffix_out.to(dtype=self.action_out_proj.weight.dtype)
+        return self.action_out_proj(suffix_out).to(dtype=torch.float32)
