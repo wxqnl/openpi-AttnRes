@@ -81,6 +81,23 @@ scripts/run_pi05_attnres_libero_train.sh \
 - gamma schedule：从 `0.0` 线性升到 `1.0`
 - gamma ramp steps：`30000`
 
+### 推荐 recipe：gamma_ramp10k
+
+LIBERO 4-suite 上经验最佳的 recipe 是 gamma 在前 **10000 步**就升到 1.0（而不是 dataclass 默认的 30000）。
+ramp10k 在 LIBERO 上 30k 训练步后 4-suite 平均 96.85%，30k ramp 默认配置略低。
+直接用现成入口：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+EXP_NAME=pi05_attnres_gamma_ramp10k_b32_fsdp_2gpu \
+PYTORCH_WEIGHT_PATH=./models/pi05_libero_pytorch \
+scripts/run_pi05_attnres_libero_train_gamma_ramp10k.sh \
+  --no-wandb-enabled \
+  --overwrite
+```
+
+这个脚本会显式设置 `OPENPI_ATTNRES_GAMMA_RAMP_STEPS=10000`（可以通过 `GAMMA_RAMP_STEPS=20000 ...` 覆盖）。其它推荐写法看脚本顶部注释。
+
 等价展开命令：
 
 ```bash
@@ -167,20 +184,28 @@ CUDA_VISIBLE_DEVICES=2 ./.venv/bin/python scripts/serve_policy.py \
 
 ## 6. 跑 LIBERO eval
 
-server 启动后，在另一个终端跑 LIBERO client：
+server 启动后，在另一个终端跑 LIBERO client。**推荐用 GPU 加速渲染（MUJOCO_GL=egl）**，比 osmesa 快 5-10×：
 
 ```bash
-export PYTHONPATH=/home/user01/Minko/openpi/third_party/libero:/home/user01/Minko/openpi/packages/openpi-client/src
+export PYTHONPATH=$PWD/third_party/libero:$PWD/packages/openpi-client/src
 export LIBERO_CONFIG_PATH=/tmp/libero
-export MUJOCO_GL=osmesa
-export CUDA_VISIBLE_DEVICES=
+export MUJOCO_GL=egl
+export EGL_DEVICE_ID=0
+export CUDA_VISIBLE_DEVICES=1   # 用空闲卡做 EGL 渲染；跟 server 卡分开
 
-/home/user01/Minko/openpi/examples/libero/.venv/bin/python examples/libero/main.py \
+./examples/libero/.venv/bin/python examples/libero/main.py \
   --args.host 127.0.0.1 \
   --args.port 18090 \
   --args.task-suite-name libero_spatial \
   --args.num-trials-per-task 1 \
   --args.video-out-path outputs/libero_rollout/pi05_attnres_spatial/videos
+```
+
+如果机器没有 EGL，可以退回 CPU 渲染（慢，仅用作 fallback）：
+
+```bash
+export MUJOCO_GL=osmesa
+export CUDA_VISIBLE_DEVICES=
 ```
 
 只跑某一个 task：
@@ -205,6 +230,36 @@ libero_goal
 libero_10
 libero_90
 ```
+
+## 6.1 LIBERO-Pro 评测结果（libero_10 row, swap / task / lan）
+
+[LIBERO-Pro](https://github.com/Zxy-MLlab/LIBERO-PRO)（arXiv [2510.03827](https://arxiv.org/abs/2510.03827)）
+是 LIBERO 的扰动评测扩展，在 4 个 base suite × 5 个扰动维度（Object / Position(swap) / Semantic(lan) / Task / Environment）
+共 20 个 cell 上测 VLA 的真实泛化能力。HF 数据集 `zhouxueyang/LIBERO-Pro` 当前只
+ship 了 4 个维度的扰动 BDDL/init 文件（缺 env）。
+
+我们在 `libero_10` row 上跑了 4 个 ckpt 的对照。**Object 维度的结果暂未列入**（涉及
+跨品类替换，正在分析中）；下表是 swap / task / lan 三维：
+
+| ckpt                          | swap (Pos) | task   | lan (Sem) | 3-dim avg |
+|-------------------------------|-----------:|-------:|----------:|----------:|
+| paper pi0.5 (leaderboard)     |      0.08  |  0.01  |    0.93   |   0.340   |
+| our base_20k                  |      0.106 |  0.062 |    0.918  |   0.362   |
+| our base_30k                  |      0.094 |  0.066 |    0.916  |   0.359   |
+| **our gamma_ramp10k_20k**     |    **0.134**| 0.096 |  **0.952**|  **0.394**|
+| our gamma_ramp10k_30k         |      0.098 |**0.100**|   0.932  |   0.377   |
+
+每个 cell 都是 500 episodes（10 task × 50 trial）的成功率。要点：
+
+- **同步数下 AttnRes vs base：** ramp10k_20k vs base_20k 在 swap/task/lan 上分别 +2.8 / +3.4 / +3.4 pp（3-dim avg +3.2 pp）；ramp10k_30k vs base_30k 在 task 上 +3.4 pp，其它两维近持平。
+- **AttnRes 在 task perturbation 上稳定 +3.4 pp**——LIBERO-Pro 主要 stress-test 的就是 task / position 这两维（paper 表中 pi0.5 task=0.01、swap=0.08，崩得最严重），AttnRes 在 task 上把 0.01 拉到 0.10，是数量级提升。
+- **20k 比 30k 更鲁棒**（ramp10k_20k 3-dim avg 0.394 > ramp10k_30k 的 0.377），表明继续训到 30k 在扰动维度上略 overfit。
+- **复现 paper：** 我们 base 在 task 上比 paper pi0.5 高（0.066 vs 0.01），可能源自 HF 数据集 2025-11-05 重新冻结后扰动种子的差异，paper leaderboard 的版本与当前 HF 文件未必完全一致。
+
+LIBERO-Pro 评测的搭建：克隆 [LIBERO-PRO](https://github.com/Zxy-MLlab/LIBERO-PRO) repo，
+下载 HF dataset 把 bddl_files / init_files merge 进 `libero/libero/{bddl_files,init_files}/`，
+然后用 `examples/libero/main.py --args.task-suite-name libero_10_swap`（等）启动。
+完整 setup 不在 openpi 本仓库内维护，看 LIBERO-PRO 的 README。
 
 ## 7. 旧 checkpoint 迁移
 

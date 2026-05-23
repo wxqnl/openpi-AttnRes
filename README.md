@@ -292,6 +292,29 @@ uv run torchrun \
     scripts/train_pytorch.py <config_name> --exp_name=<run_name> --save_interval <interval>
 ```
 
+### AttnRes Finetuning Variant (PI0.5 LIBERO)
+
+This fork adds a PaliGemma-side AttnRes (attention-residual + per-block gamma) adapter
+on top of pi0.5, targeting LIBERO. The recommended recipe — `gamma_ramp10k` —
+ramps the AttnRes gating gamma from 0 → 1 over the first **10k** steps (not the
+30k dataclass default), and reaches ~96.85% LIBERO 4-suite avg at 30k steps.
+
+```bash
+# 1. Prepare the pi0.5 base PyTorch checkpoint (one-time):
+uv run scripts/prepare_pi05_base_pytorch.py --torch-dir ./models/pi05_libero_pytorch
+
+# 2. Launch the gamma_ramp10k recipe (2-GPU FSDP, 30k steps, b=32):
+CUDA_VISIBLE_DEVICES=0,1 \
+EXP_NAME=pi05_attnres_gamma_ramp10k_b32_fsdp_2gpu \
+PYTORCH_WEIGHT_PATH=./models/pi05_libero_pytorch \
+scripts/run_pi05_attnres_libero_train_gamma_ramp10k.sh \
+  --no-wandb-enabled --overwrite
+```
+
+Knobs (`GAMMA_RAMP_STEPS`, `NUM_TRAIN_STEPS`, `BATCH_SIZE`, ...) are documented at the top of
+the script. Full design notes, checkpoint format, eval-server setup, and LIBERO client
+recipe live in [`docs/PI05_ATTNRES_LIBERO.md`](docs/PI05_ATTNRES_LIBERO.md).
+
 ### Precision Settings
 
 JAX and PyTorch implementations handle precision as follows:
